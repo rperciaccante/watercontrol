@@ -1,0 +1,668 @@
+
+substitutions:
+    # ---------------------------------------------------------------------------
+    # Project Specific Substitutions
+    sub_text_devicename:                        "Water Controller" 
+    sub_esphome_name:                           watercontroller
+    sub_code_version:                           0.0.1
+    sub_show_dev:                               "true"
+    # Network and service related substitutions
+    sub_wifi_ssid1:                             !secret esp_wifi_ssid1
+    sub_wifi_password1:                         !secret esp_wifi_pass1
+    # Fast connect is only available when a single SSID is used.  True or False
+    sub_wifi_fast_connect:                      "true"                  
+    sub_wifi_ap_password:                       !secret esp_ap_psk
+    sub_web_server_port:                        !secret esp_http_server_port
+    sub_web_server_auth_user:                   !secret esp_http_user
+    sub_web_server_auth_password:               !secret esp_http_pass
+    sub_api_password:                           !secret esp_api_pass
+    sub_ota_safe_mode:                          "true"
+    sub_ota_password:                           !secret esp_ota_pass
+
+    # This number should be 1 less than the actual number of relays
+    sub_screen_max_num:                         "3"
+
+    sub_relay1_display_name:                    "Water Valve"
+    sub_relay1_pin:                             "13"
+    sub_relay2_display_name:                    "Aux 1"
+    sub_relay2_pin:                             "12"
+    sub_flowsensor_pin:                         "11"
+    sub_watersensor_pin:                        "10"
+
+#*****************************************************************************#
+esphome:
+    name:                                       ${sub_esphome_name}
+    includes:
+      - tdisplays3/tft_espi_display.h
+      - tdisplays3/Free_Fonts.h
+    libraries:
+      - SPI
+      - FS
+      - SPIFFS
+      - tdisplays3=https://github.com/landonr/lilygo-tdisplays3-esphome.git
+    on_boot:               
+      priority:                                 600
+      then:
+        - lambda: |-
+            display->spr.setTextSize(3);
+            display->tft.fillScreen(TFT_BLACK);
+            display->tft.setRotation(1);
+        - delay:                                200ms
+        - script.execute:                       on_boot
+#*****************************************************************************#
+esp32:
+    board: esp32s3box 
+    variant: esp32s3
+    framework:
+        type: arduino
+        version: 2.0.3
+        platform_version: 5.0.0
+#*****************************************************************************#
+custom_component:
+    lambda: |-
+        App.register_component(display);
+        return {display};
+    id: displayComponent
+
+logger:
+  level:                                      DEBUG
+
+wifi: 
+  networks:
+   - ssid:                                    ${sub_wifi_ssid1}                        
+     password:                                ${sub_wifi_password1}                       
+  ap:                                         # Enable fallback hotspot
+    ssid:                                     ${sub_text_devicename} Hotspot
+    password:                                 ${sub_wifi_ap_password}
+#*****************************************************************************#
+captive_portal:
+
+#*****************************************************************************#
+ota:
+  safe_mode:                                  ${sub_ota_safe_mode}
+  password:                                   ${sub_ota_password}
+
+#*****************************************************************************#
+api:
+  password:                                   ${sub_api_password}
+  reboot_timeout:                             0s
+
+#*****************************************************************************#
+web_server: 
+  include_internal:                           ${sub_show_dev}
+  port:                                       ${sub_web_server_port}
+  js_include:                                 "./css/V2/www.js"
+  js_url:                                     ""
+  version:                                    2
+  auth:
+    username:                                 ${sub_web_server_auth_user}
+    password:                                 ${sub_web_server_auth_password}
+
+#*****************************************************************************#
+# Switches 
+switch:
+    - platform:                                 gpio
+      pin:                                      GPIO38
+      name:                                     ${sub_text_devicename} Device Backlight
+      id:                                       ${sub_esphome_name}_backlight
+      icon:                                     mdi:lightbulb
+      restore_mode:                             ALWAYS_ON
+
+    # ---------------------------------------------------------------------------
+    - platform:                                 gpio
+      id:                                       ${sub_esphome_name}_relay1
+      name:                                     ${sub_relay1_display_name}
+      pin:
+        number:                                 ${sub_relay1_pin}
+        inverted:                               true
+      restore_mode:                             RESTORE_DEFAULT_OFF 
+    # ---------------------------------------------------------------------------
+    - platform:                                 gpio
+      id:                                       ${sub_esphome_name}_relay2
+      name:                                     ${sub_relay2_display_name} 
+      pin:
+        number:                                 ${sub_relay2_pin}
+        inverted:                               true
+      restore_mode:                             RESTORE_DEFAULT_OFF 
+
+binary_sensor:
+  # ---------------------------------------------------------------------------
+  - id:                                         pageNext
+    platform:                                   gpio
+    pin:
+        number:                                 GPIO0
+        inverted:                               true
+    name:                                       ${sub_text_devicename} Page Next
+    internal:                                   true
+    on_multi_click:
+        - timing:
+            - ON for at most 1s
+            - OFF for at most 1s
+            - ON for at most 1s
+            - OFF for at least 0.2s
+          then:
+            - logger.log:                         
+                format:                         "Toggle relay button pressed"
+                level:                          WARN
+            - script.execute:                   screenTimer
+            - switch.turn_on:                   ${sub_esphome_name}_backlight
+            - lambda:   |-
+                    if (id(pageCurrent).state == 0) {
+                        if (id(${sub_esphome_name}_relay1).state == false) {
+                            id(${sub_esphome_name}_relay1).turn_on();
+                        } else { 
+                            id(${sub_esphome_name}_relay1).turn_off();
+                        }
+                    }
+                    if (id(pageCurrent).state == 1) {
+                        if (id(${sub_esphome_name}_relay2).state == false) {
+                            id(${sub_esphome_name}_relay2).turn_on();
+                        } else { 
+                            id(${sub_esphome_name}_relay2).turn_off();
+                        }
+                    }
+            - script.execute:                       pageRefresh
+        - timing:
+            - ON for 1s to 2s
+            - OFF for at least 0.5s
+          then:
+            - logger.log: 
+                format:                         "Single Long Clicked"
+                level:                          warn
+            - switch.turn_on:                   ${sub_esphome_name}_backlight
+            - number.set:
+                id:                         pageCurrent
+                value:                      ${sub_screen_max_num}
+            - script.execute:               displayFlow
+
+        - timing:
+            - ON for at most 1s
+            - OFF for at least 0.5s
+          then:
+            - logger.log: 
+                format: "Single Short Clicked"
+                level: warn
+            - logger.log:                         
+                format:                           "Next Page button pressed"
+                level:                            WARN
+            - script.execute:                     screenTimer
+            - if:
+                condition:
+                    - switch.is_off:            ${sub_esphome_name}_backlight
+                then:
+                    - switch.turn_on:           ${sub_esphome_name}_backlight
+                    - number.set:
+                        id:                     pageCurrent
+                        value:                  ${sub_screen_max_num}
+                    - script.execute:           displayStatus
+                else:
+                    - number.increment:                   pageCurrent
+                    - script.execute:                     pageRefresh
+  # ---------------------------------------------------------------------------
+  - id:                                         lightStatus
+    platform:                                   gpio
+    pin:
+        number:                                 GPIO14
+        inverted:                               false
+    name:                                       ${sub_text_devicename} Screen
+    internal:                                   true
+    on_click:
+        then:
+            - logger.log:
+                format:         "short screen button clicked"
+                level:          warn
+  - id:                                       waterSensor
+    platform:                                 gpio
+    pin:
+      number:                                 ${sub_watersensor_pin}
+      inverted:                               true
+    name:                                     ${sub_text_devicename} Page Next
+    internal:                                 true
+sensor:
+# ---------------------------------------------------------------------------
+  - id:                                       uptime_s
+    platform:                                 uptime
+    update_interval:                          10s
+    internal:                                 true
+  # ---------------------------------------------------------------------------
+  - id:                                       ${sub_esphome_name}_wifi_signal
+    platform:                                 wifi_signal
+    name:                                     ${sub_text_devicename} Device WiFi Signal
+    unit_of_measurement:                      "dBm"
+    device_class:                             "signal_strength"
+    state_class:                              "measurement"
+    entity_category:                          diagnostic
+    update_interval:                          30s
+  
+  - id:                                       waterTotalUsage
+    platform:                                 template
+    name:                                     Total Water Usage
+    internal:                                 true
+    on_value:
+        - lambda: |-
+            int yLine0 =                        48;
+            int yLine5 =                        148;
+            int xCenter =                       display->tft.width() / 2;
+            int xCLoffset =                     xCenter - 10;
+            int xCRoffset =                     xCenter + 10;
+            int xCol1Center =         xCenter * .5;
+            int xCol2Center =         xCenter * 1.5;
+            int xLoffset =            10;
+            int xRoffset =            display->tft.width() - 10;
+            int colYOffset =          40; 
+            float flow =               id(${sub_esphome_name}_water_flow).state;
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setFreeFont(FSB24);
+            if ((id(pageCurrent).state == 2) && (flow >= 0)) {
+                display->tft.fillRoundRect(xCRoffset + 10, 70, 120, 65, 10, TFT_BLACK);
+                display->tft.drawFloat(x,1,xCol2Center, 100);
+            }
+  # ---------------------------------------------------------------------------  
+  # https://community.home-assistant.io/t/using-esphome-to-build-a-water-flow-rate-meter/119380/163
+  - platform:                                 pulse_counter
+    pin:                                      ${sub_flowsensor_pin}
+    id:                                       ${sub_esphome_name}_water_flow
+    name:                                     "Water Flow"
+    update_interval:                          1s
+    accuracy_decimals:                        1
+    filters:
+        - lambda: |-
+            return x / 3.78541 / 60; // 41.63951
+    total:
+        name: "Water Total"
+        id: ${sub_esphome_name}_water_total
+        on_value:
+            - lambda: |-
+                    id(waterTotalUsage).publish_state(x);
+    on_value:
+        - lambda: |-
+            int yLine0 =                        48;
+            int yLine1 =                        68;
+            int yLine2 =                        88;
+            int yLine3 =                        108;
+            int yLine4 =                        128;
+            int yLine5 =                        148;
+            int xCenter =                       display->tft.width() / 2;
+            int xCLoffset =                     xCenter - 10;
+            int xCRoffset =                     xCenter + 10;
+            int xCol1Center =         xCenter * .5;
+            int xCol2Center =         xCenter * 1.5;
+            int xLoffset =            10;
+            int xRoffset =            display->tft.width() - 10;
+            int colYOffset =          40; 
+            float flow =               id(${sub_esphome_name}_water_flow).state;
+            float total =               id(waterTotalUsage).state;
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setFreeFont(FSB24);
+            if ((id(pageCurrent).state == 2) && (flow >= 0)) {
+                display->tft.fillRoundRect(xLoffset + 10, 70, 120, 65, 10, TFT_BLACK);
+                display->tft.drawFloat(flow,1,xCol1Center, 100);
+
+                display->tft.fillRoundRect(xCRoffset + 10, 70, 120, 65, 10, TFT_BLACK);
+                display->tft.drawFloat(total,0,xCol2Center, 100);
+            }
+    
+                
+
+text_sensor:
+  # ---------------------------------------------------------------------------  
+  - platform:                                 wifi_info             
+    ip_address:
+      name:                                   ${sub_text_devicename} Device IP Address
+      id:                                     host_ip
+      entity_category:                        diagnostic
+      icon:                                   mdi:fingerprint
+    ssid:
+      name:                                   ${sub_text_devicename} Device WiFi SSID
+      id:                                     host_ssid
+      entity_category:                        diagnostic
+      icon:                                   mdi:router-wireless
+    mac_address:
+      id:                                     host_mac
+      name:                                   ${sub_text_devicename} Device MAC Address
+      entity_category:                        diagnostic
+      icon:                                   mdi:fingerprint
+  # ----------------------------------------------------------------
+  - id:                                       uptime_f
+    platform:                                 template
+    name:                                     "Uptime"
+    internal:                                 true
+    lambda: |-
+              uint32_t dur = id(uptime_s).state;
+              int dys = 0;
+              int hrs = 0;
+              int mnts = 0;
+              if (dur > 86399) {
+                dys = trunc(dur / 86400);
+                dur = dur - (dys * 86400);
+              }
+              if (dur > 3599) {
+                hrs = trunc(dur / 3600);
+                dur = dur - (hrs * 3600);
+              }
+              if (dur > 59) {
+                mnts = trunc(dur / 60);
+                dur = dur - (mnts * 60);
+              }
+              char buffer[17];
+              sprintf(buffer, "%ud %02uh %02um %02us", dys, hrs, mnts, dur);
+              return {buffer};
+    icon:                                     mdi:clock-start
+    update_interval:                          10s
+
+#*****************************************************************************#
+# Numbers 
+number:
+    # ---------------------------------------------------------------------------
+      # Visible ONLY in the web portal, this will allow you to change the page currenty displayed on the LCD
+      #   in the web interface
+    - id:                                       pageCurrent
+      platform:                                 template
+      name:                                     Current Page
+      internal:                                 true
+      optimistic:                               true
+      initial_value:                            ${sub_screen_max_num}
+      min_value:                                0
+      max_value:                                ${sub_screen_max_num}
+      step:                                     1
+
+#*****************************************************************************# 
+# Scripts 
+script:
+    - id:                                       on_boot
+      then:
+        - logger.log:                           "System bootup underway..."
+        - script.execute:                       displayFlow
+        - script.execute:                       screenTimer
+    
+    # ---------------------------------------------------------------------------
+    - id:                                       pageRefresh
+      mode:                                     restart
+      then:
+        - lambda: |-
+                static script::Script<> *scripts[]  = {id(displayRelay1), id(displayRelay2), id(displayFlow)};
+                int current_page = id(pageCurrent).state;
+                scripts[current_page]->execute();
+        
+    # ---------------------------------------------------------------------------
+    - id:                                       displayInfo
+      mode:                                     restart
+      then:
+          - lambda: |-
+              int yLine0 =              48;
+              int yLine1 =              68;
+              int yLine2 =              88;
+              int yLine3 =              108;
+              int yLine4 =              128;
+              int yLine5 =              148;
+              int yHLine =              35;
+              int xCenter =             160;
+              int xLoffset =            10;
+              int xRoffset =            310;
+              int xCol1Center =         80;
+              int xCol2Center =         240;
+              int xCRoffset =           xCenter - 10;
+              int xCLoffset =           xCenter + 10;
+              int colYOffset =          40;
+  
+              display->tft.fillScreen(TFT_BLACK);
+              display->tft.setRotation(1);
+              display->tft.drawRoundRect(0, 0, 320, 170, 10, TFT_RED);       
+              display->tft.drawFastHLine(0, yHLine, 320, TFT_RED);
+  
+              display->tft.setFreeFont(FMB12);
+              display->tft.setTextDatum(TC_DATUM);
+              display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+              display->tft.drawString("Network Info",160, 10);
+              display->tft.setTextDatum(TL_DATUM);
+              display->tft.setFreeFont(FMB9);
+              display->tft.drawString("MAC Addr:",xLoffset,yLine0);
+              display->tft.drawString("WiFi Network:",xLoffset,yLine1);
+              display->tft.drawString("WiFi Strength:",xLoffset,yLine2);
+              display->tft.drawString("IP Address:",xLoffset,yLine3);
+              display->tft.drawString("Uptime:",xLoffset,yLine4);
+              
+              display->tft.setTextDatum(TR_DATUM);
+              display->tft.drawString(id(host_mac).state.c_str(),xRoffset, yLine0);
+              if (!wifi::global_wifi_component->is_connected()) {
+              display->tft.drawString("Not Connected",xRoffset, yLine1);
+              display->tft.drawString("Not Connected",xRoffset, yLine2);
+              display->tft.drawString("Not Connected",xRoffset, yLine3);
+              } else {
+              display->tft.drawString(id(host_ssid).state.c_str(),xRoffset, yLine1);
+              display->tft.drawString("dBm",xRoffset, yLine2);
+              display->tft.drawFloat(id(${sub_esphome_name}_wifi_signal).state,0,xRoffset - 37, yLine2);
+              display->tft.drawString(id(host_ip).state.c_str(),xRoffset,yLine3);
+              }
+  
+              display->tft.drawString(id(uptime_f).state.c_str(),xRoffset,yLine4);
+
+    - id:                                       displayStatus
+      mode:                                     restart
+      then:
+        - number.set:
+            id:                                 pageCurrent
+            value:                              3
+        - lambda: |-
+            int yLine0 =                        48;
+            int yLine1 =                        68;
+            int yLine2 =                        88;
+            int yLine3 =                        108;
+            int yLine4 =                        128;
+            int yLine5 =                        148;
+            int yHLine =                        35;
+            int xCenter =                       160;
+            int xLoffset =                      10;
+            int xRoffset =                      310;
+            int xCol1Center =                   80;
+            int xCol2Center =                   240;
+            int xCLoffset =                     xCenter - 10;
+            int xCRoffset =                     xCenter + 10;
+            int colYOffset =                    40;
+
+            display->tft.fillScreen(TFT_BLACK);
+            display->tft.setRotation(1);
+            display->tft.drawRoundRect(0, 0, 320, 170, 10, TFT_RED);       
+            display->tft.drawFastHLine(0, yHLine, 320, TFT_RED);
+            display->tft.drawFastVLine(160, 35, 135, TFT_RED);   
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(TC_DATUM);
+            display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            display->tft.drawString("Water Control Status",160, 10);
+            
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setFreeFont(FMB12);
+            display->tft.drawString("${sub_relay1_display_name}",xCol1Center,yLine0);    
+            if (id(${sub_esphome_name}_relay1).state == true) {
+                display->tft.fillRoundRect(xLoffset + 5, colYOffset + 30, 126, 90, 10, TFT_GREEN);
+                display->tft.setTextColor(TFT_BLACK, TFT_GREEN);
+                display->tft.setTextDatum(MC_DATUM);
+                display->tft.setFreeFont(FMB24);
+                display->tft.drawString("ON",xCol1Center, 110);
+            } else {
+                display->tft.fillRoundRect(xLoffset + 5, colYOffset + 30, 126, 90, 10, TFT_RED);
+                display->tft.setTextColor(TFT_WHITE, TFT_RED);
+                display->tft.setTextDatum(MC_DATUM);
+                display->tft.setFreeFont(FMB24);
+                display->tft.drawString("OFF",xCol1Center, 110);
+            }
+
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            display->tft.setFreeFont(FMB12);
+            display->tft.drawString("${sub_relay2_display_name}",xCol2Center,yLine0);
+            if (id(${sub_esphome_name}_relay2).state == true) {
+                display->tft.fillRoundRect(xCRoffset + 5, colYOffset + 30, 126,  90, 10, TFT_GREEN);
+                display->tft.setTextColor(TFT_BLACK, TFT_GREEN);
+                display->tft.setTextDatum(MC_DATUM);
+                display->tft.setFreeFont(FMB24);
+                display->tft.drawString("ON",xCol2Center, 110);
+            } else {
+                display->tft.fillRoundRect(xCRoffset + 5, colYOffset + 30, 126,  90, 10, TFT_RED);
+                display->tft.setTextColor(TFT_WHITE, TFT_RED);
+                display->tft.setTextDatum(MC_DATUM);
+                display->tft.setFreeFont(FMB24);
+                display->tft.drawString("OFF",xCol2Center, 110);
+            }
+            
+
+    - id:                                       displayFlow
+      mode:                                     restart
+      then:
+        - switch.turn_on:                       ${sub_esphome_name}_backlight
+        - number.set:
+            id:                                 pageCurrent
+            value:                              2
+        - lambda: |-
+            int yLine0 =                        48;
+            int yLine1 =                        68;
+            int yLine2 =                        88;
+            int yLine3 =                        108;
+            int yLine4 =                        128;
+            int yLine5 =                        148;
+            int yHLine =                        35;
+            int xCenter =                       160;
+            int xLoffset =                      10;
+            int xRoffset =                      310;
+            int xCol1Center =                   80;
+            int xCol2Center =                   240;
+            int xCLoffset =                     xCenter - 10;
+            int xCRoffset =                     xCenter + 10;
+            int colYOffset =                    40;
+
+            display->tft.fillScreen(TFT_BLACK);
+            display->tft.setRotation(1);
+            display->tft.drawRoundRect(0, 0, 320, 170, 10, TFT_RED);       
+            display->tft.drawFastHLine(0, yHLine, 320, TFT_RED);
+            display->tft.drawFastVLine(160, 35, 135, TFT_RED);   
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(TC_DATUM);
+            display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            display->tft.drawString("Water Flow",160, 10);
+            
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setFreeFont(FMB12);
+            display->tft.drawString("Flow Rate",xCol1Center,yLine0); 
+            display->tft.setFreeFont(FMB9);  
+            display->tft.drawString("gal/min",xCol1Center,yLine5 + 3); 
+            display->tft.setFreeFont(FMB12);
+            display->tft.drawString("Total",xCol2Center,yLine0);
+            display->tft.setFreeFont(FMB9); 
+            display->tft.drawString("gallons",xCol2Center,yLine5 + 3); 
+            
+    
+
+    # ---------------------------------------------------------------------------
+    - id:                                       displayRelay1
+      mode:                                     restart
+      then:
+        - switch.turn_on:                       ${sub_esphome_name}_backlight
+        - number.set:
+            id:                                 pageCurrent
+            value:                              0
+        - lambda: |-
+            int yHLine =                        35;
+            int xCenter =                       160;
+            int xLoffset =                      10;
+            int xRoffset =                      310;
+            int xCol1Center =                   80;
+            int xCol2Center =                   240;
+            int xCRoffset =                     xCenter - 10;
+            int xCLoffset =                     xCenter + 10;
+            int colYOffset =                    40;
+
+            display->tft.fillScreen(TFT_BLACK);
+            display->tft.setRotation(1);
+            display->tft.drawRoundRect(0, 0, 320, 170, 10, TFT_RED);       
+            display->tft.drawFastHLine(0, yHLine, 320, TFT_RED);
+            //display->tft.drawFastVLine(160, 35, 135, TFT_RED);   
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(TC_DATUM);
+            display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            display->tft.drawString("Water Control Status",160, 10);
+            display->tft.setFreeFont(FSB24);
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.drawString("${sub_relay1_display_name}",160, 65);
+            
+            if (id(${sub_esphome_name}_relay1).state == true) {
+                display->tft.setTextColor(TFT_BLACK, TFT_GREEN);
+                display->tft.fillRoundRect(xLoffset + 10, 100, 140, 60, 10, TFT_BLACK);
+                display->tft.fillRoundRect(xLoffset + 10, 100, 140, 60, 10, TFT_GREEN);
+                display->tft.drawString("ON",xCol1Center + 10, 130);
+                //display->tft.fillRoundRect(xLoffset + 5, colYOffset + 60, xLoffset, 60, 10, TFT_GREEN);
+                display->tft.fillRoundRect(xCRoffset + 10, 100, 140, 60, 10, TFT_BLACK);
+            } else {
+                display->tft.setTextColor(TFT_BLACK, TFT_RED);
+                display->tft.fillRoundRect(xCRoffset + 10, 100, 140, 60, 10, TFT_RED);
+                display->tft.drawString("OFF",xCol2Center - 10, 130);
+                display->tft.fillRoundRect(xLoffset + 10, 100, 140, 60, 10, TFT_BLACK);
+                //display->tft.fillRoundRect(xLoffset + 5, colYOffset + 60, xCLoffset, 60, 10, TFT_BLACK);
+            }
+            
+
+    # ---------------------------------------------------------------------------
+    - id:                                       displayRelay2
+      mode:                                     restart
+      then:
+        - number.set:
+            id:                                 pageCurrent
+            value:                              1
+        - switch.turn_on:                       ${sub_esphome_name}_backlight
+        - lambda: |-
+            int yHLine =                        35;
+            int xCenter =                       160;
+            int xLoffset =                      10;
+            int xRoffset =                      310;
+            int xCol1Center =                   80;
+            int xCol2Center =                   240;
+            int xCRoffset =                     xCenter - 10;
+            int xCLoffset =                     xCenter + 10;
+            int colYOffset =                    40;
+
+            display->tft.fillScreen(TFT_BLACK);
+            display->tft.setRotation(1);
+            display->tft.drawRoundRect(0, 0, 320, 170, 10, TFT_RED);       
+            display->tft.drawFastHLine(0, yHLine, 320, TFT_RED);
+            //display->tft.drawFastVLine(160, 35, 135, TFT_RED);   
+            display->tft.setFreeFont(FMB12);
+            display->tft.setTextDatum(TC_DATUM);
+            display->tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            display->tft.drawString("Water Control Status",160, 10);
+            display->tft.setFreeFont(FSB24);
+            display->tft.setTextDatum(MC_DATUM);
+            display->tft.setFreeFont(FSB24);
+            display->tft.drawString("${sub_relay2_display_name}",160, 65);
+            
+            if (id(${sub_esphome_name}_relay2).state == true) {
+                display->tft.setTextColor(TFT_BLACK, TFT_GREEN);
+                display->tft.fillRoundRect(xLoffset + 10, 100, 140, 60, 10, TFT_GREEN);
+                display->tft.drawString("ON",xCol1Center + 10, 130);
+                //display->tft.fillRoundRect(xLoffset + 5, colYOffset + 60, xLoffset, 60, 10, TFT_GREEN);
+                display->tft.fillRoundRect(xCRoffset + 10, 100, 140, 60, 10, TFT_BLACK);
+            } else {
+                display->tft.setTextColor(TFT_WHITE, TFT_RED);
+                display->tft.fillRoundRect(xCRoffset + 10, 100, 140, 60, 10, TFT_RED);
+                display->tft.drawString("OFF",xCol2Center - 10, 130);
+                display->tft.fillRoundRect(xLoffset + 10, 100, 140, 60, 10, TFT_BLACK);
+                //display->tft.fillRoundRect(xLoffset + 5, colYOffset + 60, xCLoffset, 60, 10, TFT_BLACK);
+            }
+        # ---------------------------------------------------------------------------
+    
+    # ---------------------------------------------------------------------------    
+    - id:                                       screenTimer
+      mode:                                     restart
+      then:
+        - logger.log:
+            format:                             "Screensaver timer started"
+            level:                              WARN
+        - if:
+            condition:                 
+              switch.is_on:                     ${sub_esphome_name}_backlight
+            then:
+            - delay:                            60s
+            - logger.log:                     
+                format:                         "Screensaver timeout reached"
+                level:                          WARN
+            - switch.turn_off:                  ${sub_esphome_name}_backlight
